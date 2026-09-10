@@ -58,9 +58,8 @@ kubectl --context "kind-${cluster_name}" apply -f "$project_dir/manifests/victim
 kubectl --context "kind-${cluster_name}" wait --for=condition=Ready pod/victim-a -n tenant-a --timeout=180s
 kubectl --context "kind-${cluster_name}" wait --for=condition=Ready pod/victim-b -n tenant-b --timeout=180s
 
-"$provider" cp "$script_dir/probe-node.sh" "$node_name:/tmp/probe-node.sh"
-"$provider" exec "$node_name" chmod 0755 /tmp/probe-node.sh
-"$provider" exec "$node_name" bash /tmp/probe-node.sh "$mode" >"$result_file"
+"$provider" exec -i "$node_name" bash -s -- "$mode" \
+  <"$script_dir/probe-node.sh" >"$result_file"
 
 {
   echo "timestamp_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
