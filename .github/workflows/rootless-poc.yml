@@ -44,7 +44,7 @@ jobs:
         shell: bash
         env:
           POC_PROVIDER: ${{ matrix.provider }}
-        run: ./scripts/run-case.sh "${{ matrix.mode }}"
+        run: bash scripts/run-case.sh "${{ matrix.mode }}"
 
       - name: Show raw result
         if: always()
@@ -65,7 +65,7 @@ jobs:
         shell: bash
         env:
           POC_PROVIDER: ${{ matrix.provider }}
-        run: ./scripts/cleanup.sh "${{ matrix.mode }}" || true
+        run: bash scripts/cleanup.sh "${{ matrix.mode }}" || true
 
   compare:
     needs: probe
@@ -88,4 +88,3 @@ jobs:
         with:
           name: comparison
           path: results/
-
