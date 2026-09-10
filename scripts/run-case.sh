@@ -24,7 +24,7 @@ canary_dir="/var/tmp/rootless-k8s-poc-${mode}"
 result_file="$project_dir/results/${mode}.tsv"
 metadata_file="$project_dir/results/${mode}-metadata.txt"
 
-"$script_dir/prereq-check.sh" "$mode"
+bash "$script_dir/prereq-check.sh" "$mode"
 mkdir -p "$project_dir/results"
 
 sudo install -d -o root -g root -m 0755 "$canary_dir"
