@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-b
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alpha-secret
+  namespace: tenant-a
+type: Opaque
+stringData:
+  value: POC_ALPHA_SYNTHETIC_SECRET
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: beta-secret
+  namespace: tenant-b
+type: Opaque
+stringData:
+  value: POC_BETA_SYNTHETIC_SECRET
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orphan-secret
+  namespace: tenant-a
+type: Opaque
+stringData:
+  value: POC_ORPHAN_MUST_NOT_BE_NODE_READABLE
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-a
+  namespace: tenant-a
+  labels:
+    app: victim-a
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: app
+      image: busybox:1.36.1
+      command: ["sh", "-c", "sleep 86400"]
+      volumeMounts:
+        - name: synthetic-secret
+          mountPath: /synthetic-secret
+          readOnly: true
+  volumes:
+    - name: synthetic-secret
+      secret:
+        secretName: alpha-secret
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: victim-b
+  namespace: tenant-b
+  labels:
+    app: victim-b
+spec:
+  automountServiceAccountToken: false
+  containers:
+    - name: app
+      image: busybox:1.36.1
+      command: ["sh", "-c", "sleep 86400"]
+      volumeMounts:
+        - name: synthetic-secret
+          mountPath: /synthetic-secret
+          readOnly: true
+  volumes:
+    - name: synthetic-secret
+      secret:
+        secretName: beta-secret
+
