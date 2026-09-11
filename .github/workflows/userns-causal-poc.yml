@@ -1,0 +1,53 @@
+name: UserNS causal PoC
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/userns-causal-poc.yml'
+      - 'userns-causal-poc/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  causal-poc:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Kubernetes v1.36 through K3s
+        env:
+          INSTALL_K3S_VERSION: v1.36.0+k3s1
+        run: |
+          curl -sfL https://get.k3s.io | sh -s - server \
+            --write-kubeconfig-mode 0644 \
+            --disable traefik
+          mkdir -p "$HOME/.kube"
+          sudo cp /etc/rancher/k3s/k3s.yaml "$HOME/.kube/config"
+          sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+
+      - name: Run matched reversal experiment
+        env:
+          ARTIFACT_DIR: artifacts
+        run: bash userns-causal-poc/run.sh
+
+      - name: Show summary
+        if: always()
+        run: |
+          test -f artifacts/environment.txt && sed -n '1,160p' artifacts/environment.txt || true
+          test -f artifacts/results.tsv && column -t -s $'\t' artifacts/results.tsv || true
+          test -f artifacts/summary.json && jq . artifacts/summary.json || true
+          test -f artifacts/psa-results.jsonl && jq -s . artifacts/psa-results.jsonl || true
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: userns-causal-evidence
+          path: artifacts/
+          if-no-files-found: warn
+
