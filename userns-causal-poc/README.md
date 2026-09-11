@@ -8,8 +8,10 @@ security context, host sentinel, and network target.
 The initial Go/No-Go evidence is:
 
 1. treatment receipt: UID map, host-observed UID, and user namespace inode;
-2. host-impact proxy: permission check against a root-owned host process visible
-   through `hostPID` (using non-destructive `kill -0`);
+2. host-impact proxy: `CAP_SYS_MODULE` authority, tested using a deliberately
+   invalid module. A host-authorized call reaches module-format validation,
+   whereas a capability scoped to a child UserNS should fail at permission
+   checking. No valid module is loaded;
 3. negative controls: explicitly mounted `hostPath` access and service network
    reachability should remain stable;
 4. native-policy control: Pod Security Admission behavior for UID 0 with and
