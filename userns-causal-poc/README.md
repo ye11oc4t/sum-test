@@ -8,11 +8,12 @@ security context, host sentinel, and network target.
 The initial Go/No-Go evidence is:
 
 1. treatment receipt: UID map, host-observed UID, and user namespace inode;
-2. host-impact proxy: read/write access to a root-owned `0600` host sentinel;
-3. negative control: service network reachability should remain stable;
+2. host-impact proxy: permission check against a root-owned host process visible
+   through `hostPID` (using non-destructive `kill -0`);
+3. negative controls: explicitly mounted `hostPath` access and service network
+   reachability should remain stable;
 4. native-policy control: Pod Security Admission behavior for UID 0 with and
    without pod UserNS.
 
 The sentinel is created only on the disposable GitHub-hosted runner. The test
 does not exploit a CVE or target any external system.
-
