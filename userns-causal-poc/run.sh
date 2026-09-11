@@ -115,8 +115,9 @@ EOF
     return 0
   fi
 
-  local cid pid inside_uid uid_map container_userns host_uid host_userns sentinel_read sentinel_write negative_network image_id
-  cid="$(sudo k3s crictl ps --name userns-probe -q | head -n1)"
+  local pod_id cid pid inside_uid uid_map container_userns host_uid host_userns sentinel_read sentinel_write negative_network image_id
+  pod_id="$(sudo k3s crictl pods --name userns-probe -q | head -n1)"
+  cid="$(sudo k3s crictl ps --pod "$pod_id" -q | head -n1)"
   pid="$(sudo k3s crictl inspect "$cid" | jq -r '.info.pid // .status.pid // empty')"
   inside_uid="$(kubectl -n "$NAMESPACE" exec userns-probe -- id -u | tr -d '\r')"
   uid_map="$(kubectl -n "$NAMESPACE" exec userns-probe -- cat /proc/self/uid_map | awk '{$1=$1};1' | paste -sd ';' -)"
@@ -223,4 +224,3 @@ PY
 
 kubectl get pods -A -o wide > "$ARTIFACT_DIR/pods.txt"
 kubectl get events -A --sort-by=.lastTimestamp > "$ARTIFACT_DIR/events.txt"
-
