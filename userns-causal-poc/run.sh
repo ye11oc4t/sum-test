@@ -11,7 +11,7 @@ mkdir -p "$ARTIFACT_DIR"
 RESULTS="$ARTIFACT_DIR/results.tsv"
 ENVIRONMENT="$ARTIFACT_DIR/environment.txt"
 
-printf 'phase\tpod\thostUsers\tinside_uid\tuid_map\tcontainer_userns\thost_uid\thost_userns\thost_process_probe\thostpath_read\thostpath_write\tnegative_network\timage_id\n' > "$RESULTS"
+printf 'phase\tpod\thostUsers\tinside_uid\tuid_map\tcontainer_userns\thost_uid\thost_userns\tsys_module_probe\thostpath_read\thostpath_write\tnegative_network\timage_id\n' > "$RESULTS"
 
 {
   printf 'date_utc='; date -u +%FT%TZ
@@ -28,7 +28,9 @@ sudo install -d -m 0755 "$HOST_SENTINEL_DIR"
 printf 'host-root-only\n' | sudo tee "$HOST_SENTINEL_DIR/sentinel" >/dev/null
 sudo chown 0:0 "$HOST_SENTINEL_DIR/sentinel"
 sudo chmod 0600 "$HOST_SENTINEL_DIR/sentinel"
-HOST_TEST_PID="$(sudo sh -c 'sleep 3600 >/dev/null 2>&1 & echo $!')"
+printf 'not-a-kernel-module\n' | sudo tee "$HOST_SENTINEL_DIR/invalid.ko" >/dev/null
+sudo chown 0:0 "$HOST_SENTINEL_DIR/invalid.ko"
+sudo chmod 0644 "$HOST_SENTINEL_DIR/invalid.ko"
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
@@ -72,11 +74,7 @@ kubectl -n "$NAMESPACE" rollout status deployment/echo --timeout=120s
 cleanup_pod() {
   kubectl -n "$NAMESPACE" delete pod userns-probe --ignore-not-found --wait=true >/dev/null
 }
-cleanup_all() {
-  cleanup_pod
-  sudo kill "$HOST_TEST_PID" 2>/dev/null || true
-}
-trap cleanup_all EXIT
+trap cleanup_pod EXIT
 
 run_phase() {
   local phase="$1"
@@ -98,7 +96,6 @@ metadata:
 spec:
   nodeName: ${NODE_NAME}
   hostUsers: ${host_users}
-  hostPID: true
   restartPolicy: Never
   containers:
   - name: probe
@@ -107,6 +104,8 @@ spec:
     securityContext:
       runAsUser: 0
       runAsGroup: 0
+      capabilities:
+        add: ["SYS_MODULE"]
     volumeMounts:
     - name: host-sentinel
       mountPath: /host-sentinel
@@ -124,7 +123,7 @@ EOF
     return 0
   fi
 
-  local pod_id cid pid inside_uid uid_map container_userns host_uid host_userns host_process_probe hostpath_read hostpath_write negative_network image_id
+  local pod_id cid pid inside_uid uid_map container_userns host_uid host_userns sys_module_probe module_output module_rc hostpath_read hostpath_write negative_network image_id
   pod_id="$(sudo k3s crictl pods --name userns-probe -q | head -n1)"
   cid="$(sudo k3s crictl ps --pod "$pod_id" -q | head -n1)"
   pid="$(sudo k3s crictl inspect "$cid" | jq -r '.info.pid // .status.pid // empty')"
@@ -135,10 +134,17 @@ EOF
   host_userns="$(sudo readlink "/proc/${pid}/ns/user")"
   image_id="$(kubectl -n "$NAMESPACE" get pod userns-probe -o jsonpath='{.status.containerStatuses[0].imageID}')"
 
-  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c "kill -0 ${HOST_TEST_PID}"; then
-    host_process_probe=permitted
+  set +e
+  module_output="$(kubectl -n "$NAMESPACE" exec userns-probe -- sh -c 'busybox insmod /host-sentinel/invalid.ko' 2>&1)"
+  module_rc=$?
+  set -e
+  printf '%s\n' "$module_output" > "$ARTIFACT_DIR/${phase}-sys-module.txt"
+  if printf '%s' "$module_output" | grep -Eqi 'operation not permitted|permission denied'; then
+    sys_module_probe=blocked_at_permission
+  elif printf '%s' "$module_output" | grep -Eqi 'invalid|format|exec format|bad message'; then
+    sys_module_probe=reached_module_validation
   else
-    host_process_probe=blocked
+    sys_module_probe="other_rc_${module_rc}"
   fi
   if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c 'cat /host-sentinel/sentinel >/dev/null'; then
     hostpath_read=success
@@ -158,7 +164,7 @@ EOF
 
   printf '%s\tuserns-probe\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$phase" "$host_users" "$inside_uid" "$uid_map" "$container_userns" "$host_uid" "$host_userns" \
-    "$host_process_probe" "$hostpath_read" "$hostpath_write" "$negative_network" "$image_id" >> "$RESULTS"
+    "$sys_module_probe" "$hostpath_read" "$hostpath_write" "$negative_network" "$image_id" >> "$RESULTS"
 }
 
 # Reversal design: the only intended treatment change is hostUsers.
@@ -225,7 +231,7 @@ summary = {
     "uid_map_reversal": changed("uid_map"),
     "host_uid_reversal": changed("host_uid"),
     "userns_inode_reversal": changed("container_userns"),
-    "host_process_authority_reversal": changed("host_process_probe"),
+    "sys_module_authority_reversal": changed("sys_module_probe"),
     "hostpath_read_stable": len({r.get("hostpath_read") for r in normal}) == 1,
     "hostpath_write_stable": len({r.get("hostpath_write") for r in normal}) == 1,
     "negative_network_stable": len({r.get("negative_network") for r in normal}) == 1,
