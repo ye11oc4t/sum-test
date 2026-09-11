@@ -11,7 +11,7 @@ mkdir -p "$ARTIFACT_DIR"
 RESULTS="$ARTIFACT_DIR/results.tsv"
 ENVIRONMENT="$ARTIFACT_DIR/environment.txt"
 
-printf 'phase\tpod\thostUsers\tinside_uid\tuid_map\tcontainer_userns\thost_uid\thost_userns\tsentinel_read\tsentinel_write\tnegative_network\timage_id\n' > "$RESULTS"
+printf 'phase\tpod\thostUsers\tinside_uid\tuid_map\tcontainer_userns\thost_uid\thost_userns\thost_process_probe\thostpath_read\thostpath_write\tnegative_network\timage_id\n' > "$RESULTS"
 
 {
   printf 'date_utc='; date -u +%FT%TZ
@@ -28,6 +28,7 @@ sudo install -d -m 0755 "$HOST_SENTINEL_DIR"
 printf 'host-root-only\n' | sudo tee "$HOST_SENTINEL_DIR/sentinel" >/dev/null
 sudo chown 0:0 "$HOST_SENTINEL_DIR/sentinel"
 sudo chmod 0600 "$HOST_SENTINEL_DIR/sentinel"
+HOST_TEST_PID="$(sudo sh -c 'sleep 3600 >/dev/null 2>&1 & echo $!')"
 
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
@@ -71,13 +72,20 @@ kubectl -n "$NAMESPACE" rollout status deployment/echo --timeout=120s
 cleanup_pod() {
   kubectl -n "$NAMESPACE" delete pod userns-probe --ignore-not-found --wait=true >/dev/null
 }
-trap cleanup_pod EXIT
+cleanup_all() {
+  cleanup_pod
+  sudo kill "$HOST_TEST_PID" 2>/dev/null || true
+}
+trap cleanup_all EXIT
 
 run_phase() {
   local phase="$1"
   local host_users="$2"
 
   cleanup_pod
+  printf 'host-root-only\n' | sudo tee "$HOST_SENTINEL_DIR/sentinel" >/dev/null
+  sudo chown 0:0 "$HOST_SENTINEL_DIR/sentinel"
+  sudo chmod 0600 "$HOST_SENTINEL_DIR/sentinel"
   cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: Pod
@@ -90,6 +98,7 @@ metadata:
 spec:
   nodeName: ${NODE_NAME}
   hostUsers: ${host_users}
+  hostPID: true
   restartPolicy: Never
   containers:
   - name: probe
@@ -115,7 +124,7 @@ EOF
     return 0
   fi
 
-  local pod_id cid pid inside_uid uid_map container_userns host_uid host_userns sentinel_read sentinel_write negative_network image_id
+  local pod_id cid pid inside_uid uid_map container_userns host_uid host_userns host_process_probe hostpath_read hostpath_write negative_network image_id
   pod_id="$(sudo k3s crictl pods --name userns-probe -q | head -n1)"
   cid="$(sudo k3s crictl ps --pod "$pod_id" -q | head -n1)"
   pid="$(sudo k3s crictl inspect "$cid" | jq -r '.info.pid // .status.pid // empty')"
@@ -126,15 +135,20 @@ EOF
   host_userns="$(sudo readlink "/proc/${pid}/ns/user")"
   image_id="$(kubectl -n "$NAMESPACE" get pod userns-probe -o jsonpath='{.status.containerStatuses[0].imageID}')"
 
-  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c 'test "$(cat /host-sentinel/sentinel)" = host-root-only'; then
-    sentinel_read=success
+  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c "kill -0 ${HOST_TEST_PID}"; then
+    host_process_probe=permitted
   else
-    sentinel_read=blocked
+    host_process_probe=blocked
   fi
-  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c 'printf x >> /host-sentinel/sentinel'; then
-    sentinel_write=success
+  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c 'cat /host-sentinel/sentinel >/dev/null'; then
+    hostpath_read=success
   else
-    sentinel_write=blocked
+    hostpath_read=blocked
+  fi
+  if kubectl -n "$NAMESPACE" exec userns-probe -- sh -c "printf '%s' '${phase}' >> /host-sentinel/sentinel"; then
+    hostpath_write=success
+  else
+    hostpath_write=blocked
   fi
   if kubectl -n "$NAMESPACE" exec userns-probe -- wget -qO- --timeout=5 "http://echo.${NAMESPACE}.svc.cluster.local:5678" | grep -q negative-control-ok; then
     negative_network=success
@@ -142,9 +156,9 @@ EOF
     negative_network=failed
   fi
 
-  printf '%s\tuserns-probe\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\tuserns-probe\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$phase" "$host_users" "$inside_uid" "$uid_map" "$container_userns" "$host_uid" "$host_userns" \
-    "$sentinel_read" "$sentinel_write" "$negative_network" "$image_id" >> "$RESULTS"
+    "$host_process_probe" "$hostpath_read" "$hostpath_write" "$negative_network" "$image_id" >> "$RESULTS"
 }
 
 # Reversal design: the only intended treatment change is hostUsers.
@@ -211,8 +225,9 @@ summary = {
     "uid_map_reversal": changed("uid_map"),
     "host_uid_reversal": changed("host_uid"),
     "userns_inode_reversal": changed("container_userns"),
-    "sentinel_read_reversal": changed("sentinel_read"),
-    "sentinel_write_reversal": changed("sentinel_write"),
+    "host_process_authority_reversal": changed("host_process_probe"),
+    "hostpath_read_stable": len({r.get("hostpath_read") for r in normal}) == 1,
+    "hostpath_write_stable": len({r.get("hostpath_write") for r in normal}) == 1,
     "negative_network_stable": len({r.get("negative_network") for r in normal}) == 1,
     "image_digest_stable": len({r.get("image_id") for r in normal}) == 1,
     "rows": rows,
